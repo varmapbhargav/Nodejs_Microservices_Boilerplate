@@ -1,0 +1,239 @@
+version: '3.8'
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    networks:
+      - platform-network
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_DB: platform
+      POSTGRES_USER: platform
+      POSTGRES_PASSWORD: platform123
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    networks:
+      - platform-network
+
+  zookeeper:
+    image: confluentinc/cp-zookeeper:7.4.0
+    environment:
+      ZOOKEEPER_CLIENT_PORT: 2181
+      ZOOKEEPER_TICK_TIME: 2000
+    networks:
+      - platform-network
+
+  kafka:
+    image: confluentinc/cp-kafka:7.4.0
+    depends_on:
+      - zookeeper
+    ports:
+      - "9092:9092"
+    environment:
+      KAFKA_BROKER_ID: 1
+      KAFKA_ZOOKEEPER_CONNECT: zookeeper:2181
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+    networks:
+      - platform-network
+
+  api-gateway:
+    build:
+      context: ./services/api-gateway
+      dockerfile: Dockerfile
+    ports:
+      - "3000:3000"
+    environment:
+      NODE_ENV: development
+      PORT: 3000
+      AUTH_SERVICE_URL: http://auth-service:3001
+      USER_SERVICE_URL: http://user-service:3002
+      CORE_SERVICE_URL: http://core-service:3003
+      NOTIFICATION_SERVICE_URL: http://notification-service:3004
+      AUDIT_SERVICE_URL: http://audit-service:3005
+      FEATURE_FLAG_SERVICE_URL: http://feature-flag-service:3006
+      REDIS_URL: redis://redis:6379
+      LOG_LEVEL: info
+    depends_on:
+      - redis
+      - auth-service
+      - user-service
+      - core-service
+      - notification-service
+      - audit-service
+      - feature-flag-service
+    networks:
+      - platform-network
+
+  auth-service:
+    build:
+      context: ./services/auth-service
+      dockerfile: Dockerfile
+    ports:
+      - "3001:3001"
+    environment:
+      NODE_ENV: development
+      PORT: 3001
+      JWT_SECRET: your-super-secret-jwt-key-change-in-production
+      JWT_EXPIRES_IN: 1h
+      REFRESH_TOKEN_EXPIRES_IN: 7d
+      REDIS_URL: redis://redis:6379
+      POSTGRES_URL: postgresql://platform:platform123@postgres:5432/platform
+      LOG_LEVEL: info
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - platform-network
+
+  user-service:
+    build:
+      context: ./services/user-service
+      dockerfile: Dockerfile
+    ports:
+      - "3002:3002"
+    environment:
+      NODE_ENV: development
+      PORT: 3002
+      REDIS_URL: redis://redis:6379
+      POSTGRES_URL: postgresql://platform:platform123@postgres:5432/platform
+      LOG_LEVEL: info
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - platform-network
+
+  core-service:
+    build:
+      context: ./services/core-service
+      dockerfile: Dockerfile
+    ports:
+      - "3003:3003"
+    environment:
+      NODE_ENV: development
+      PORT: 3003
+      REDIS_URL: redis://redis:6379
+      POSTGRES_URL: postgresql://platform:platform123@postgres:5432/platform
+      KAFKA_BROKERS: kafka:9092
+      LOG_LEVEL: info
+    depends_on:
+      - redis
+      - postgres
+      - kafka
+    networks:
+      - platform-network
+
+  notification-service:
+    build:
+      context: ./services/notification-service
+      dockerfile: Dockerfile
+    ports:
+      - "3004:3004"
+    environment:
+      NODE_ENV: development
+      PORT: 3004
+      REDIS_URL: redis://redis:6379
+      POSTGRES_URL: postgresql://platform:platform123@postgres:5432/platform
+      SMTP_HOST: mailhog
+      SMTP_PORT: 1025
+      SMTP_USER: ""
+      SMTP_PASS: ""
+      EMAIL_FROM: noreply@platform.com
+      LOG_LEVEL: info
+    depends_on:
+      - redis
+      - postgres
+      - mailhog
+    networks:
+      - platform-network
+
+  mailhog:
+    image: mailhog/mailhog:latest
+    ports:
+      - "1025:1025"
+      - "8025:8025"
+    networks:
+      - platform-network
+
+  audit-service:
+    build:
+      context: ./services/audit-service
+      dockerfile: Dockerfile
+    ports:
+      - "3005:3005"
+    environment:
+      NODE_ENV: development
+      PORT: 3005
+      REDIS_URL: redis://redis:6379
+      POSTGRES_URL: postgresql://platform:platform123@postgres:5432/platform
+      LOG_LEVEL: info
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - platform-network
+
+  feature-flag-service:
+    build:
+      context: ./services/feature-flag-service
+      dockerfile: Dockerfile
+    ports:
+      - "3006:3006"
+    environment:
+      NODE_ENV: development
+      PORT: 3006
+      REDIS_URL: redis://redis:6379
+      POSTGRES_URL: postgresql://platform:platform123@postgres:5432/platform
+      LOG_LEVEL: info
+    depends_on:
+      - redis
+      - postgres
+    networks:
+      - platform-network
+
+  prometheus:
+    image: prom/prometheus:latest
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./infra/prometheus/prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+      - '--web.console.libraries=/etc/prometheus/console_libraries'
+      - '--web.console.templates=/etc/prometheus/consoles'
+    networks:
+      - platform-network
+
+  grafana:
+    image: grafana/grafana:latest
+    ports:
+      - "3001:3000"
+    environment:
+      GF_SECURITY_ADMIN_PASSWORD: admin
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./infra/grafana/dashboards:/etc/grafana/provisioning/dashboards
+      - ./infra/grafana/datasources:/etc/grafana/provisioning/datasources
+    networks:
+      - platform-network
+
+volumes:
+  redis_data:
+  postgres_data:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  platform-network:
+    driver: bridge
